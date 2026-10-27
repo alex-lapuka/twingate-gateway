@@ -1,0 +1,72 @@
+# Fork-only: upstream's release.yaml and ci.yaml publish to twingate/* registries, which a fork cannot write to.
+name: Fork image
+
+on:
+  push:
+    branches-ignore:
+      - master
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}
+      PLATFORMS: linux/amd64,linux/arm64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .tool-versions
+
+      - name: Run unit tests
+        run: make test
+
+      - name: Compute version
+        run: |
+          # The fork carries no tags, so take the release this branch is based on from upstream.
+          git fetch --quiet --tags https://github.com/Twingate/gateway.git
+          base=$(git describe --tags --abbrev=0 --exclude '*-*')
+          echo "VERSION=${base#v}.${GITHUB_RUN_NUMBER}-fork-$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+          echo "BRANCH_TAG=${GITHUB_REF_NAME//\//-}" >> "$GITHUB_ENV"
+
+      - name: Build binaries
+        run: |
+          for platform in ${PLATFORMS//,/ }; do
+            CGO_ENABLED=0 GOOS=${platform%/*} GOARCH=${platform#*/} go build -trimpath \
+              -ldflags "-s -w -X gateway/internal/util/version.Version=${VERSION}" \
+              -o "context/${platform}/gateway" .
+          done
+          cp LICENSE context/
+
+      - uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
+
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        run: |
+          docker buildx build context \
+            --file Dockerfile.goreleaser \
+            --platform "$PLATFORMS" \
+            --tag "$IMAGE:$VERSION" \
+            --tag "$IMAGE:$BRANCH_TAG" \
+            --label "org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}" \
+            --label "org.opencontainers.image.revision=${{ github.sha }}" \
+            --label "org.opencontainers.image.version=$VERSION" \
+            --push
+          echo "Published \`$IMAGE:$VERSION\` and \`$IMAGE:$BRANCH_TAG\`" >> "$GITHUB_STEP_SUMMARY"

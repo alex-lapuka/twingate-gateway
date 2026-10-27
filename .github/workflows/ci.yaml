@@ -112,7 +112,7 @@ jobs:
           flags: unit
           name: unit-tests
           token: ${{ secrets.CODECOV_TOKEN }}
-          fail_ci_if_error: true
+          fail_ci_if_error: false
           verbose: true
 
       - name: Upload integration test coverage to CodeCov
@@ -122,7 +122,7 @@ jobs:
           flags: integration
           name: integration-tests
           token: ${{ secrets.CODECOV_TOKEN }}
-          fail_ci_if_error: true
+          fail_ci_if_error: false
           verbose: true
 
       - name: Upload unit test results to CodeCov
